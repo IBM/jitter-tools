@@ -1,0 +1,15 @@
+# ============================================================================ #
+#                                                                              #
+#   Copyright (C) 2017 IBM - All Rights reserved.                              #
+#   Unauthorized copying of this file via any medium is strictly prohibited.   #
+#                                                                              #
+# ============================================================================ #
+
+Tools to evaluate software jitter
+
+cpuset-scripts      scripts to setup cpu isolation (requires sudo)
+jitter-bench        benchmark to measure jitter profile and performance impact
+jitter-trace        tool to trace events that generate jitter (requires sudo)
+run-scripts         scripts to run benchmarks and tracing tools
+variability-bench   benchmark to measure jitter
+
