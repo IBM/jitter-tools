@@ -1,0 +1,133 @@
+#!/bin/bash
+######################################
+# CPUSETS Parameters:
+CPUSET_ROOT=/dev/cpuset
+USER=$CPUSET_ROOT/user
+SYSTEM=$CPUSET_ROOT/system
+CPUACCT_ROOT=/dev/cpuacct
+CPUACCT_USER=$CPUACCT_ROOT/user
+CPUACCT_SYSTEM=$CPUACCT_ROOT/system
+
+CLOSE_REPS=20
+# POWER 8
+#USER_CPUS="0-71,80-151"
+#SYSTEM_CPUS="72-79,152-159"
+
+# POWER 9
+USER_CPUS="0-83,88-171"
+SYSTEM_CPUS="84-87,172-175"
+FILENAME=$0
+INIT_REPS=3
+########################################
+
+######################################
+#Functions 
+function cleanup {
+  LIST=`find $1 -mindepth 1 -depth -type d`
+  for DIR in $LIST ; do
+    let CNT=0
+    while [ -d $DIR ] && [ $CNT -lt $CLOSE_REPS ];  do
+      while read i; do sudo /bin/echo $i; done < $DIR/tasks > $1/tasks 2>/dev/null
+      sudo rmdir $DIR
+      let CNT+=1
+    done
+  done
+  sudo umount $1
+  sudo rmdir $1
+}
+
+function log_error {
+  echo "$FILENAME line $LINENO: $@"
+  cleanup $CPUSET_ROOT
+  cleanup $CPUACCT_ROOT
+  exit 1
+}
+
+function exec_log {
+  ERRLOG=$($@ 2>&1)
+  if [ "$?" != "0" ]; then
+    ERRSTRING="$@: $ERRLOG"
+    log_error "$ERRSTRING"
+  fi
+}
+
+function move_tasks {
+  echo "Attempting to move all tasks from $1 to $2 ..."
+  BEFORE=`cat $1/tasks |wc -l`
+  for R in `seq 1 $INIT_REPS`; do 
+    echo rep $R
+    out=$(while read i; do sudo /bin/echo $i; done < $1/tasks > $2/tasks 2>/dev/null)
+  done
+  AFTER=`cat $2/tasks |wc -l` 
+  if [ "$BEFORE" == "$AFTER" ]; then
+    log_error "Error: unable to move tasks from $1 to $2"
+  fi
+}
+
+function cpuset_init {
+  if [ -d $CPUSET_ROOT ]; then
+    log_error "cpuset $CPUSET_ROOT already exists, exiting"
+  fi
+  echo "Creating $USER and $SYSTEM"
+  #Create cpusets
+  exec_log sudo mkdir -p $CPUSET_ROOT
+  exec_log sudo mount -t cpuset cpuset $CPUSET_ROOT
+  exec_log sudo mkdir -p $USER $SYSTEM
+  exec_log sudo chmod a+x $CPUSET_ROOT
+  exec_log sudo chmod a+rw $CPUSET_ROOT/*
+  exec_log sudo chmod a+x $SYSTEM 
+  exec_log sudo chmod a+rw $SYSTEM/*
+  exec_log sudo chmod a+x $USER
+  exec_log sudo chmod a+rw $USER/*
+  #Configure cpusets
+  sudo /bin/echo 0 > $CPUSET_ROOT/cpuset.cpu_exclusive &&
+    sudo /bin/echo 0 > $CPUSET_ROOT/cpuset.mem_exclusive &&
+    sudo /bin/echo $SYSTEM_CPUS > $SYSTEM/cpuset.cpus &&
+    sudo /bin/cat $CPUSET_ROOT/cpuset.mems > $SYSTEM/cpuset.mems &&
+    sudo /bin/echo 1 > $SYSTEM/cpuset.memory_migrate &&
+    sudo /bin/echo $USER_CPUS > $USER/cpuset.cpus &&
+    sudo /bin/cat $CPUSET_ROOT/cpuset.mems > $USER/cpuset.mems &&
+    sudo /bin/echo 1 > $USER/cpuset.memory_migrate
+  if [ "$?" != "0" ]; then
+    log_error "cannot configure cpuset"
+  fi
+  #Move tasks from root to system cpuset
+  move_tasks $CPUSET_ROOT $SYSTEM
+}
+
+function cpuacct_init {
+  if [ -d $CPUACCT_ROOT ]; then
+    log_error "cpuset $CPUACCT_ROOT already exists, exiting"
+  fi
+  echo "Creating $CPUACCT_USER and $CPUACCT_SYSTEM"
+  #Create cpuacct
+  exec_log sudo mkdir -p $CPUACCT_ROOT
+  exec_log sudo mount --bind /sys/fs/cgroup/cpuacct $CPUACCT_ROOT
+  exec_log sudo mkdir -p $CPUACCT_USER $CPUACCT_SYSTEM
+  exec_log sudo chmod a+x $CPUACCT_ROOT
+  exec_log sudo chmod a+rw $CPUACCT_ROOT/*
+  exec_log sudo chmod a+x $CPUACCT_SYSTEM 
+  exec_log sudo chmod a+rw $CPUACCT_SYSTEM/*
+  exec_log sudo chmod a+x $CPUACCT_USER
+  exec_log sudo chmod a+rw $CPUACCT_USER/*
+
+  #Move tasks from root to system cpuacct
+  move_tasks $CPUACCT_ROOT $CPUACCT_SYSTEM
+}
+
+function show_info {
+  echo "-- $1 --"
+  echo "#tasks: `cat $1/tasks|wc -l`"
+  echo "cpus: `cat $1/cpuset.cpus`"
+  echo "mems: `cat $1/cpuset.mems`"
+  echo "cpu_exclusive: `cat $1/cpuset.cpu_exclusive`"
+  echo "mem_exclusive: `cat $1/cpuset.mem_exclusive`"
+  echo "migration: `cat $1/cpuset.memory_migrate`"
+}
+
+#######################################
+cpuset_init
+cpuacct_init
+show_info $CPUSET_ROOT
+show_info $SYSTEM
+show_info $USER

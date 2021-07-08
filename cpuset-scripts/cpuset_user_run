@@ -1,0 +1,14 @@
+#!/bin/sh
+
+USER_CPUSET=/dev/cpuset/user
+
+if [ $# -lt 1 ]; then
+	echo "** Executes a process in the user cpuset **"
+	echo "usage: $0 <executable> <args> ..."
+	exit
+fi
+EXEC=$1
+shift
+echo $$ > $USER_CPUSET/tasks
+set -x
+$EXEC $@

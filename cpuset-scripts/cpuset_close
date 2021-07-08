@@ -1,0 +1,55 @@
+#!/bin/bash
+######### Parameters ##################
+CPUSET_ROOT=/dev/cpuset
+CPUACCT_ROOT=/dev/cpuacct
+
+FILENAME=$0
+let CLOSE_REPS=20
+
+######################################
+#Functions 
+function log_error {
+  echo "$FILENAME line $LINENO: $@"
+  exit 1
+}
+
+function exec_log {
+  ERRLOG=$($@ 2>&1)
+  if [ "$?" != "0" ]; then
+    ERRSTRING="$@: $ERRLOG"
+    log_error "$ERRSTRING"
+  fi
+}
+
+function move_tasks {
+  for REP in "1 2"; do 
+    out=$(while read i; do sudo /bin/echo $i; done < $1/tasks > $2/tasks 2>/dev/null)
+  done
+}
+
+function cpuset_close {
+  LIST=`find $1 -mindepth 1 -depth -type d`
+  if [ -z "$LIST" ]; then 
+    log_error "Cpuset not initialized"
+  fi
+  for DIR in $LIST ; do
+    let CNT=0
+    while [ -d $DIR ] && [ $CNT -lt $CLOSE_REPS ];  do
+      move_tasks $DIR $1
+      sudo rmdir $DIR
+      let CNT+=1
+    done
+    if [ -d $DIR ]; then
+      log_error "Could not remove $DIR"
+    fi
+  done
+  exec_log sudo umount $1 
+  exec_log sudo rmdir $1
+}
+
+#############################################################
+echo "Moving all tasks to $CPUSET_ROOT then removing cpusets"
+cpuset_close $CPUSET_ROOT
+
+echo "Moving all tasks to $CPUACCT_ROOT then removing cpuaccts"
+cpuset_close $CPUACCT_ROOT

@@ -1,0 +1,13 @@
+#!/bin/sh
+
+if [ $# -lt 2 ]; then
+	echo "** Executes a process in the given cpuset **"
+	echo "usage: $0 <cpuset path> <executable> <args> ..."
+	exit
+fi
+CPUSET=$1
+EXEC=$2
+shift
+shift
+echo $$ > $CPUSET/tasks
+$EXEC $@

@@ -1,0 +1,23 @@
+#!/bin/sh
+
+if [ $# -lt 2 ]; then
+	echo "** Move tasks between cpusets **"
+	echo "usage: $0 <source cpuset path> <dest cpuset path> [<filter>]"
+	exit
+fi
+
+filter=$3
+
+echo "Attempting to move tasks from $1 to $2"
+echo "Before: `cat $1/tasks |wc -l` tasks in $1 and `cat $2/tasks |wc -l` tasks in $2"
+for REP in "1 2"; do 
+    while read i; do 
+            comm=`cat /proc/$i/comm`
+        if [ -z "$filter" ] || [ "$comm" == "$filter" ]; then
+            #echo "moving $i ($comm) to $2"
+            sudo /bin/echo $i > $2/tasks  2>/dev/null
+
+        fi
+    done < $1/tasks 
+done
+echo "After: `cat $1/tasks |wc -l` tasks in $1 and `cat $2/tasks |wc -l` tasks in $2"
