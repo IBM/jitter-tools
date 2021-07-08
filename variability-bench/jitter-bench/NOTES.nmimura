@@ -1,0 +1,111 @@
+--------------------------------------------------------------------------------
+Sep 10, 2018
+--------------------------------------------------------------------------------
+
+Changing tracing implementation from libjt/ftrace combo to internal trace[f][p]
+with filtering. Current tracing uses the following variables (defined in main
+and propagated to other functions):
+
+int  do_trace      =  0;
+int  do_ftrace     =  0;
+long ft_jthr       =  LONG_MAX; // jitter duration threshold
+long ft_jseq       =  1;        // jitter sequence length threshold
+long ft_bthr       =  LONG_MAX; // barrier duration threshold
+
+The new implementation will only use print_cutoff combined to a tracing flag
+(simple on/off switch). Moreover, the flag does not need to be propagated to
+functions since the tracing -- i.e., generation of JTF files to collect and
+process traces -- is done at the end, after the benchmark loop is finished.
+
+First step: remove the old tracing variables and associated logic:
+
+do_trace  -- done
+do_ftrace -- done
+ft_jthr   -- done
+ft_jseq   -- done
+ft_bthr   -- done
+
+static inline void phase_loop(
+  int do_ftrace, int communication, comp_kern_t workload,
+  double ft_jthr, uint64_t ft_jseq, double ft_bthr,
+  uint64_t phases, uint64_t iters, struct timespec *timestamp)
+
+static void do_phase_loop(
+  int do_ftrace, int communication, comp_kern_t workload,
+  double ft_jthr, uint64_t ft_jseq, double ft_bthr,
+  uint64_t phases, uint64_t iters, struct timespec *timestamp)
+
+#define LOOP(ftrace,barrier,work) \
+  phase_loop(ftrace, barrier, work, \
+  ft_jthr, ft_jseq, ft_bthr, \
+  phases, iters, timestamp)
+
+11:00   All references removed, including associated logic. Build and test
+        before proceeding.
+
+/opt/ibm/spectrum_mpi/jsm_pmix/bin/jsrun --nrs 1 --tasks_per_rs 42
+--gpu_per_rs 4 --rs_per_host 1 --launch_distribution packed
+--smpiargs="" /gpfs/wscgpfs01/nmimura/jitter-tools/run-scripts/cpuset-wsc.sh
+../jitter-bench/jitter-bench -m lutexp -p 1000 -c 5000
+[jtf] JT_DIR not found -- stop
+*** The MPI_Abort() function was called before MPI_INIT was invoked.
+
+Need to remove the __attribute__((constructor)) function. Also, the logic to
+read the tracing environment variables can be associated to the tracing flag,
+so no need (at least a priori) to have it processed during program
+initialization.
+
+11:25   Next step is adding the tracing flag associated to print_cutoff.
+        print_cutoff is the time threshold (in ms) that indicates the phase
+        duration (compute + jitter) limit to start printing the raw data.
+
+The previous tracing logic was executed on a per-rank basis, while the
+statistics loop -- where the new logic will be inserted at -- is executed only
+for rank 0. This suggest a slight change in design:
+
+1) Rank 0 generates a single JTF file with all jitter occurrences
+2) During post-processing (after jitter-bench is finished), each node will
+    call some flavor of jtf_collect
+3) jtf_collect (on each node) will process the (single) JTF file and generate
+    "sub-files" containing the associated JTF line(s) and the tracing region(s).
+
+This also suggests that we can do some simple tests before even starting the
+benchmark (loop). For instance, if tracing is enabled, we can open the JTF
+file and try to write to it before even starting the benchmark. If we cannot
+write (e.g., cannot create files) we can discover before wasting time on
+the benchmark itself.
+
+11:50   The JTF file will contain a list of jitter entries to be processed.
+        Having a single JTF file helps to avoid generating too many files as
+        in the previous design. However, rank 0 does not have information
+        about hostnames from each rank. This might help though:
+
+sprintf(title, "Rank %d [%s cpu %d]",
+    r,
+    node_info_array[r].hostname,
+    node_info_array[r].cpu);
+print_rank_stats(title, &chist_array[r]);
+
+The per-rank histograms are actually printed from rank 0, since they need to
+be sorted. This node_info_array should contain the information I need. In the
+code excerpt above r obviously is the rank number.
+
+12:10   Now that the basic tracing variables and logic are in place -- and
+        fairly tested, both with and without the flag -- I can proceed to thhe
+        implementation of the JTF generation in the statistics logic.
+
+The code block responsible for this part starts with:
+// print raw data (per rank).
+...
+if (rank == 0) {
+  ...
+
+Note that only rank 0 will process this.
+The part where printf_cutoff is processed is here:
+if (print_raw && ((dt * 1e6) >= ((double) print_cutoff)))
+
+12:45   New JTF logic has been added to jitter-bench and pushed to the
+        repository. The next step is to edit the post-processing scripts
+        -- in particular the collect and filter phases -- to process
+        this new JTF format.
+

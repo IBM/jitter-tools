@@ -1,0 +1,30 @@
+#
+# cpuset-scripts
+#
+
+Cpuset scripts can be used to set up cpusets in order to run with CPU isolation.
+This scripts are to be used standalone in a cluster where the user has sudo priviledges.
+Usage:
+
+1) Create cpusets and move all the movable tasks to the system cpuset:
+
+ $./cpuset_init
+    
+2) Execute cpuset_user_run to run your application in the user cpuset:
+
+ $./cpuset_user_run <binary> <arguments>
+
+If this is an mpi job cpuset scripts need to be avaialable on each node
+and can be used as follows:
+ 
+ $ mpirun <mpi parameters>  ./cpuset_user_run <mpi binary> <arguments>
+
+3) Remove cpusets:
+ 
+ $./cpuset_close
+
+
+Additional scripts provided:
+ cpuset_move - moves tasks between 2 cpusets
+ cpuset_info - prints the status of cpusets
+ cpuset_run - runs a binary in a given cpuset

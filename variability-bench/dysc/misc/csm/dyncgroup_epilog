@@ -1,0 +1,23 @@
+#!/usr/bin/env python
+
+#
+#   IBM Corporation (C) 2018
+#   Patrick Siegl -- patrick.siegl@ibm.com
+#
+#   Reset dysc
+#
+
+import os
+import sys
+import argparse
+import re
+import subprocess
+
+def runcmd(cmd):
+  r_code = subprocess.call(cmd)
+  if r_code > 0:
+    print "warning: command '{0}' returned {1}".format(str(cmd), r_code)
+  return r_code
+
+cmd = ['/bin/systemctl', 'stop', 'dysc']
+runcmd( cmd )

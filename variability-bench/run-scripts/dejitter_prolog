@@ -1,0 +1,79 @@
+#!/bin/bash
+
+#
+#   IBM Corporation (C) 2018
+#   Bryan Rosenburg -- rosnbrg@us.ibm.com
+#
+#   Take all cpus in a specified cgroup offline, and then bring them back
+#   online, in hopes of pushing recurring kernel noise off those cpus.
+#
+
+#exec > /tmp/dejitter.$$.out 2>&1
+
+system_cpus_file=/sys/fs/cgroup/cpuset/csm_system/cpuset.cpus
+if [ ! -r $system_cpus_file ]; then
+    echo "Can't open cpu list for cgroup csm_system"
+    exit -1
+fi
+#echo system_cpus_file = $system_cpus_file
+
+system_cpus=$(cat $system_cpus_file)
+#echo system_cpus = $system_cpus
+
+system_expanded=$( \
+    echo $system_cpus | tr ,- '\n ' | \
+    awk 'NF == 1 {printf(" %d", $1)} \
+         NF == 2 {for (i = $1; i <= $2; i++) printf(" %d", i)}' \
+)
+#echo system_expanded = $system_expanded
+
+system_primaries=$(for i in $system_expanded; \
+			do if (( $i % 4 == 0 )); then echo $i; fi; done)
+#echo system_primaries = $system_primaries
+
+system_secondaries=$(for i in $system_primaries; \
+			do echo $(($i+1)) $(($i+2)) $(($i+3)); done)
+#echo system_secondaries = $system_secondaries
+
+for i in $system_secondaries
+do
+    if (( $(cat /sys/devices/system/cpu/cpu$i/online) == 0 ))
+    then
+	echo "Adding cpu $i to csm_system cgroup"
+	echo 1 >> /sys/devices/system/cpu/cpu$i/online
+	system_cpus=$system_cpus,$i
+    fi
+done
+
+echo $system_cpus > $system_cpus_file
+#echo -n "csm_system cgroup cpuset: "; cat $system_cpus_file
+
+cgroup=allocation_${CSM_ALLOCATION_ID}
+#echo cgroup = $cgroup
+
+cpus_file=/sys/fs/cgroup/cpuset/$cgroup/cpuset.cpus
+if [ ! -r $cpus_file ]; then
+    echo "Can't open cpu list for cgroup $cgroup"
+    exit -1
+fi
+#echo cpus_file = $cpus_file
+
+cpus=$(cat $cpus_file)
+#echo cpus = $cpus
+
+cpus_expanded=$( \
+    echo $cpus | tr ,- '\n ' | \
+    awk 'NF == 1 {printf(" %d", $1)} \
+         NF == 2 {for (i = $1; i <= $2; i++) printf(" %d", i)}' \
+)
+#echo cpus_expanded = $cpus_expanded
+
+for i in $cpus_expanded; do echo 0 > /sys/devices/system/cpu/cpu$i/online; done
+#echo -n $(hostname) "after offlining: "; cat /sys/devices/system/cpu/online
+
+for i in $cpus_expanded; do echo 1 > /sys/devices/system/cpu/cpu$i/online; done
+#echo -n $(hostname) "after onlining: "; cat /sys/devices/system/cpu/online
+
+# It seems that dejittering removes all cpus from the allocation cgroup.
+# Restore them here.
+echo $cpus > $cpus_file

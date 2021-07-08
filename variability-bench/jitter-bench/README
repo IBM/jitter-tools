@@ -1,0 +1,9 @@
+###### Jitter-bench instructions ###############
+
+DESCRIPTION:
+
+Jitter-bench is a benchmark to measure jitter (OS noise)
+It is a simple MPI program that can be executed using multiple ranks per node.
+It performs a given number of computation phases, each followed by a barrier and it measures the OS noise.
+
+Usage: ./jitter-bench -h 

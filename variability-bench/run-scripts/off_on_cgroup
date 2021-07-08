@@ -1,0 +1,43 @@
+#/bin/bash
+
+#
+#   IBM Corporation (C) 2018
+#   Bryan Rosenburg -- rosnbrg@us.ibm.com
+#
+#   Take all cpus in a specified cgroup offline, and then bring them back
+#   online, in hopes of pushing recurring kernel noise off those cpus.
+#
+
+if [ $# != 1 ]; then
+    echo "Usage: $0 <cgroup_name>"
+    exit -1
+fi
+cgroup=$1
+#echo cgroup = $cgroup
+
+cpus_file=/sys/fs/cgroup/cpuset/$cgroup/cpuset.cpus
+if [ ! -r $cpus_file ]; then
+    echo "Can't open cpu list for cgroup $cgroup"
+    exit -1
+fi
+#echo cpus_file = $cpus_file
+
+cpus=$(cat $cpus_file)
+#echo cpus = $cpus
+
+cpus_expanded=$( \
+    echo $cpus | tr ,- '\n ' | \
+    awk 'NF == 1 {printf(" %d", $1)} \
+         NF == 2 {for (i = $1; i <= $2; i++) printf(" %d", i)}' \
+)
+#echo cpus_expanded = $cpus_expanded
+
+for i in $cpus_expanded; do echo 0 > /sys/devices/system/cpu/cpu$i/online; done
+#echo -n $(hostname) "after offlining: "; cat /sys/devices/system/cpu/online
+
+for i in $cpus_expanded; do echo 1 > /sys/devices/system/cpu/cpu$i/online; done
+#echo -n $(hostname) "after onlining: "; cat /sys/devices/system/cpu/online
+
+# It seems that dejittering removes all cpus from the allocation cgroup.
+# Restore them here.
+echo $cpus > $cpus_file

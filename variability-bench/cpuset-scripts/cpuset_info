@@ -1,0 +1,24 @@
+#!/bin/bash
+
+echo "** Show cpuset info**"
+echo "usage: $0 [cpuset path]"
+
+ROOT=/dev/cpuset
+
+function show_info {
+	echo "-- $1 --" 
+	echo "#tasks: `cat $1/tasks|wc -l`"
+	echo "cpus: `cat $1/cpuset.cpus`"
+	echo "mems: `cat $1/cpuset.mems`"
+	echo "cpu_exclusive: `cat $1/cpuset.cpu_exclusive`"
+	echo "mem_exclusive: `cat $1/cpuset.mem_exclusive`"
+	echo "migration: `cat $1/cpuset.memory_migrate`"
+}
+
+if [ -z "$1" ]; then
+	for DIR in `find $ROOT -depth -type d `; do
+		show_info $DIR 
+	done
+else
+	show_info $1
+fi

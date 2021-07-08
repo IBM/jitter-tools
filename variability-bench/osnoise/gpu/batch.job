@@ -1,0 +1,14 @@
+#BSUB -o %J.out
+#BSUB -e %J.err
+##BSUB -nnodes 1
+#BSUB -csm y 
+#BSUB -R "1*{select[LN]} + 40*{select[CN&&(hname==sierra2837)&&(type==any)]span[ptile=42]}"
+#BSUB -G guests
+#BSUB -alloc_flags "smt1 cpublink"
+#BSUB -core_isolation 2
+#BSUB -J osnoise
+#BSUB -q pdebug
+#BSUB -W 30
+#---------------------------------------
+jsrun  --tasks_per_rs 4 --rs_per_host 1 --nrs 1 --cpu_per_rs 40 --gpu_per_rs 4        -d plane:4 --bind=proportional-packed:10  ./osnoise -d -c 5 -t 40 -x 100 -n 31
+

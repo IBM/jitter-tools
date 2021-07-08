@@ -1,0 +1,99 @@
+#!/usr/bin/env python
+
+#
+#   IBM Corporation (C) 2018
+#   Patrick Siegl -- patrick.siegl@ibm.com
+#
+#   Set up and start dysc
+#
+
+import os
+import sys
+import argparse
+import re
+import subprocess
+import fileinput
+import datetime
+import socket
+
+dyncgroup_cfgfile = "/etc/sysconfig/dysc"
+dyncgroup_daemon  = "dysc"
+cgroup_name       = "csm_system"
+cgroup_opt_cpus   = 1
+smt_mode          = 4
+
+
+def runcmd(cmd):
+  r_code = subprocess.call(cmd)
+  if r_code > 0:
+    print "warning: command '{0}' returned {1}".format(str(cmd), r_code)
+  return r_code
+
+
+p = subprocess.Popen(['/usr/bin/rpm', '-q', 'dysc'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+out, err = p.communicate()
+if out != ("package %s is not installed\n" % dyncgroup_daemon):
+  cmd = ['/usr/bin/rpm', '-e', 'dysc' ]
+  runcmd( cmd )
+
+print("Installing RPM %s" % dyncgroup_daemon)
+cmd = ['/usr/bin/rpm', '-i', '/shared/lsf-csm/csm_cn/prologs/WSC/dysc-0.1-0.ppc64le.rpm']
+runcmd (cmd)
+cmd = ['/bin/systemctl', 'daemon-reload']
+runcmd (cmd)
+
+
+regex = re.compile ("(\D+)(\d*)$")
+for elem in [sys.argv[-2], sys.argv[-1]]:
+  fparse = regex.match (elem.upper())
+  if hasattr(fparse, 'group'):
+    if fparse.group(1) == "DYNCGROUP":
+      if fparse.group(2) != '' and int(fparse.group(2)) >= cgroup_opt_cpus:
+        cgroup_opt_cpus = int(fparse.group(2))
+    elif fparse.group(1) == "SMT":
+      smt_mode = int(fparse.group(2))
+
+if cgroup_opt_cpus > 0:
+  # set up the config file
+  for line in fileinput.input(dyncgroup_cfgfile, inplace = 1): 
+    line = re.sub(r'DYSC__CGROUP=.*', 'DYSC__CGROUP=/%s' % cgroup_name, line)
+    line = re.sub(r'DYSC__GROUP_OPT_CPUS=.*', 'DYSC__GROUP_OPT_CPUS=%d' % cgroup_opt_cpus, line)
+    line = re.sub(r'SMT_MODE=.*', 'SMT_MODE=%d' % smt_mode, line)
+
+    jobid = ""
+    if 'CSM_PRIMARY_JOB_ID' in os.environ:
+      jobid = os.environ['CSM_PRIMARY_JOB_ID']
+    line = re.sub(r'FILEOUTPUT=.*', 'FILEOUTPUT=/gpfs/wscgpfs01/kayi/IOR_TEST/%s/logfile-jobid%s-%s.log' % (socket.gethostname(), jobid, datetime.datetime.now().strftime("%y-%m-%d_%H-%M" )), line)
+    sys.stdout.write (line) # odd fileinput API, but writes it back to file
+
+  ###############################################################
+  # Workaround: check if cgroup accounting is set-up
+  #         -> future fix will be coming soon
+  cpuset_fh = open("/sys/fs/cgroup/cpuset/%s/tasks" % cgroup_name, "r")
+  cpuset_fh_cnt = cpuset_fh.readlines()
+  cpuset_fh.close()
+  for tid in cpuset_fh_cnt: # need to write tid 1 by 1 :-(
+    tid = tid.replace("\n", "")
+    try:
+      os.system('sudo su -c /bin/bash -c "/bin/echo %s > /sys/fs/cgroup/cpuacct/csm_system/tasks" 2>&1 >/dev/null' % tid)
+    except:
+      print ("INFO: couldn't move tid %s to cgroup '/%s'" % (tid, cgroup_name))
+
+  # also capture the mmfsd:
+  try:
+    pid = subprocess.check_output(["/usr/sbin/pidof", "mmfsd"]).replace("\n", "")
+    fls = os.listdir("/proc/%s/task" % pid)
+    for tid in fls:
+      os.system('sudo su -c /bin/bash -c "/bin/echo %s > /sys/fs/cgroup/cpuacct/csm_system/tasks" 2>&1 >/dev/null' % tid)
+  except:
+    print("WARN: didn't work")
+
+  ###############################################################
+
+  # (re)start daemon. Should be turned off anyway.
+  cmd = ['/bin/systemctl', 'restart', dyncgroup_daemon]
+  runcmd( cmd )
+else:
+  # make sure it is turned off
+  cmd = ['/bin/systemctl', 'stop', dyncgroup_daemon]
+  runcmd( cmd )

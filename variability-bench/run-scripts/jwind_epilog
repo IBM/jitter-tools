@@ -1,0 +1,10 @@
+#!/bin/bash
+
+#
+#   IBM Corporation (C) 2018
+#   Bryan Rosenburg -- rosnbrg@us.ibm.com
+#
+#   Kill jwind_cgroup.
+#
+
+killall jwind_cgroup

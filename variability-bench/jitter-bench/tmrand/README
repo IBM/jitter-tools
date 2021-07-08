@@ -1,0 +1,24 @@
+This directory has code for a "tiny" variant of the Mersenne
+twister random-number generator :
+
+http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/TINYMT/
+
+I packaged that into a routine that returns an array of random
+doubles 0.0 <= rand < 1.0.
+
+for systems with 64-bit "long" types :
+
+void TMrand(unsigned long seed, int npts, double * xrand);
+
+add extern "C" qualifier for use in C++.  Typical use :
+
+unsigned long seed = 13579UL;
+int npts = 1000;
+double * xrand = (double *) malloc(npts*sizeof(double));
+TMrand(seed, npts, xrand);
+...
+
+To use, just add the proper declaration of tmrand() and link
+with libtmrand.a.
+
+There is an example in this directory : main.x .
