@@ -1,0 +1,211 @@
+================================================================================
+Sep 10, 2018
+================================================================================
+
+12:45   After adding the new JTF tracing logic to jitter-bench the next step is
+        to modify the post-processing scripts to make use of the new format.
+
+It is easier to manipulate files from the Shell script. The filtering process
+however must be done in C since it is much faster than any other implementation
+I have tried -- Python or Shell. The process essentially is:
+
+1) Copy traces from tracefs to /tmp.
+2) Run filtering program using JTF as input.
+3) Move results to job directory.
+
+The current trace processing after executing the application and stopping the
+tracing infrastructure first verifies if "s" was passed to the tracing option.
+It is important to notice that tracing must be enabled both on run-wsc and on
+jitter-bench. On jitter-bench it enables the generation of the JTF file, while
+on run-wsc it calls the auxiliary scripts to start, stop, and collect the
+traces.
+
+13:00   The current trace collection logic on run-wsc is quite convoluted.
+        There is a small code block for the filtered collection via
+        tracefs-collect. There is a large code block for the manual collection,
+        but the logic there is not too different from the one in
+        tracefs-collect. Ideally the collection should be done by the same
+        script, and a "filtered" flag should be passed to indicate if there is
+        a JTF file to be used to filter the collection or not.
+
+Modified run-wsc to drastically simplify trace collection for tracefs case.
+Now the collection logic is basically:
+
+  | echo "tracefs tracing: copy"
+  | echoval "${SDIR}/tracefs/tracefs-collect.sh
+  |     \${job} ${dir} $(hostname) ${tracedir} ${user}"
+  | echo "tracefs tracing: copy done"
+  |
+  | echo
+  | echo "tracefs tracing: clean"
+  | for host in \${hosts}; do
+  |   cmd="${SDIR}/tracefs/tracefs-reset.sh"
+  |   echoval "sudo ssh \${host} \"\${cmd}\" &"
+  |   done
+  |   wait
+  | echo "tracefs tracing: clean done"
+
+tracefs-collect script receives five arguments:
+  job         job id
+  dir         job directory
+  dst         destination host
+  trd         tracing temporary directory
+  usr         user
+
+So the flow will be:
+- Get list of hosts from job<job>.hosts
+- On each host:
+  - Copy traces to <trd> (.raw or .original)
+  - If JTF exists:
+    - Run filter
+  - Else:
+    - Rename to final trace name
+  - Copy trace to <dst>
+
+Checking if JTF exists is easier than having to pass the ${trc} value along.
+Also, that would require specifying the [s] in [s]trace[f][p]. However, the
+current prolog/epilog scripts do not recognize it, especially the ones in the
+labs. I just dropped support for the "s" bit in the ${trc} parameter.
+
+13:20   Having tracefs-collect deal with hosts would require either a function
+        or another script to do the actual work on each host. On the other hand,
+        pdsh can take care of distributing the tasks and controlling the number
+        of concurrent writers, something desirable to avoid bringing down
+        shared file systems. So I need to add the host sweeping part to run-wsc.
+
+13:35   Actually, all processing and filtering can be done at the same time;
+        only the copy from CN to login/launch node needs to be controlled.
+        For now we can leave the logic as it is, but in the future it might be
+        better to separate local copy + ( filter | rename ) and remote copy.
+
+13:50   Simplified even more the logic. Now tracefs-collect only moves the
+        traces from tracefs to /tmp, filters the traces if necessary, and
+        generates the "final" trace files in the tracing directory. run-wsc
+        executes this script in all hosts at the same time since there is no
+        parallelism downside (a priori) -- unless the tracing directory is in
+        a shared filesystem -- shouldn't be. run-wsc then moves the files from
+        compute nodes to the final destination directory -- job directory.
+
+14:10   It makes more sense to have one file per host, whether it is the raw
+        unfiltered trace of the output from the filter program. JTF entries
+        are sorted per rank, not by occurrence. Consequently I might need to go
+        over the trace multiple times. This might be very inefficient since the
+        trace file, especially the aggregated one, can be fairly large. Another
+        possibility is implementing the filter as an MPI program, one rank per
+        rank in the file for that particular host. That would generate one
+        final file per rank, with the advantage that I can focus on a particular
+        sub-trace per rank.
+
+The in-node parallelization can also be achieved from Shell level, by processing
+the JTF outside the filter program, then launching multiple filter programs, one
+per rank. In fact, that was the previous design, although there was no actual
+parallelization. However, this requires multiple JTFs as before.
+
+14:35   Trace collection without filtering can be seen as a special case of
+        filtering with time limits on the extremes (zero and infinite). The JTF
+        file is simple enough to be processed both by Shell and C. Example:
+
+rank  host      cpu     ta                   tb                    dt
+------------------------------------------------------------------------------
+0     c699c006  0       108474.629540622     108474.635773895      0.006233273
+3     c699c006  12      108476.076304524     108476.083353832      0.007049308
+3     c699c006  12      108477.758876372     108477.766214661      0.007338289
+3     c699c006  12      108478.706999120     108478.714285669      0.007286549
+
+(First two lines added manually). A grep and a cut are enough to determine which
+traces need to be retrieved from tracefs. This allows me to only copy the traces
+from the CPUs of interest.
+
+14:40   Is it better to have one file per host or one per rank? One per rank
+        might explode for larger node counts. One per node might take a long
+        while to be filtered.
+
+15:10   Using pdsh also for the collect phase might be helpful. In any case we
+        can always increase the fanout value (sliding window).
+
+16:15   Infrastructure up to tracefs-collect is prepared. The only missing piece
+        now is the filter program. Since I have to process multiple points, I
+        decided to start from an empty file and reuse whatever logic from the
+        previous version when applicable.
+
+================================================================================
+Sep 11, 2018
+================================================================================
+
+13:50   Tested JTF parsing.
+
+14:30   The filter program is called for each cpu that needs to be processed.
+        The JTF file contains entries for all CPUs -- I could separate them, but
+        that would only lead to more files versus a minor gain in terms of
+        entries per file.
+
+In process_trace() I iterate over the JTF entries, which are now already stored
+in the reg_t objects. Entries that do not match the cpu being processed are just
+ignored, so the logic here is easy. The only time wasted away is processing the
+JTF entries that are not related to the cpu being processed.
+
+When filtering a trace file based on the JTF entries:
+1) The current trace timestamp is BEFORE the region;
+2) The current trace timestamp is INSIDE the region; or
+3) The current trace timestamp is AFTER  the region.
+
+Since JTF regions are time sorted, for (1) we can advance the timestamp --
+meaning, we can read trace lines until the timestamp is (2). Once we reach
+(3), we can go to the next JTF entry.
+
+If the trace starts in (2) the should_copy method should return true. However,
+if the trace starts in (3) for the first region, the region will be empty on the
+final trace file and we go to the next region until we are in (2) or (1). If
+we are never in these states (e.g., we only have traces after the JTF events)
+then the resulting trace will only contain the JTF headers.
+
+15:15   Changing general float precision to 6 decimals in all code, including
+        JTF generation in jitter-bench.
+
+15:45   First functional version, tested using a standalone setup (no
+        integration to jitter-bench and/or run-wsc yet). Starting integrated
+        tests now.
+
+16:05   Still pending integrated tests, unfortunately WSC is down (nodes are
+        closed although no jobs are running there). After these tests the next
+        step is to identify potential optimizations. The main one is 
+        parallelizing the filter program, since it is called for each CPU and 
+        for each tracing type (ftrace and tracep). Worst case this would lead to
+        CPUs x 2 parallel processes.
+
+A more conservative optimization is to parallelize on a per-CPU basis, thus
+processing ftrace and tracep together but CPU by CPU. Might help saving the
+tracep time, since ftrace usually takes longer. Note that there are two 
+optimization opportunities: during the local copy and during the filtering.
+
+16:15   Executed integrated tests using jitter nodes, filtered tracing works as
+        expected. To observe data production and movement, run a simple traced 
+        job and open the following windows/panes:
+
+        Run job:
+        $ ./run-wsc.sh -d out -n 1 -t tracep -q excl_jitter -j JITTER -x
+          ../jitter-bench/jitter-bench -m lutexp -p 1000 -c 5000 -d 5100 -t
+
+        Output dir:
+        $ cd out
+        $ watch ls -lh
+
+        Trace dir on compute node:
+        $ ssh CN
+        $ cd /tmp/traces
+        $ watch ls -lh
+
+        Job execution:
+        $ watch bpeek
+
+        This will show jitter-bench being executed, the JTF file being produced,
+        the raw trace files being copied from tracefs to /tmp, the filtering 
+        generating the final trace files, the raw traces being deleted, the
+        filtered traces being copied to the login node, and the traces being
+        deleted on CN /tmp.
+
+16:20   Small tweak to filtered trace files: add padding to CPU numbering 
+        (3 digits). Also, since everything is serialized now, I moved the 
+        filtering block together with the copying block. If I decide to 
+        parallelize each step for each CPU, then I can re-split them.
+

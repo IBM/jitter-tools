@@ -1,0 +1,26 @@
+#!/bin/bash
+
+#
+#   IBM Corporation (C) 2018
+#   Bryan Rosenburg -- rosnbrg@us.ibm.com
+#
+#   Launch jwind_cgroup in the background.
+#
+
+alloc_flag=$1
+#echo alloc_flag = $alloc_flag
+
+window=$(echo $alloc_flag | sed -e 's/jwind\([0-9]*\)x[0-9]*/\1/')
+#echo window = $window
+
+period=$(echo $alloc_flag | sed -e 's/jwind[0-9]*x\([0-9]*\)/\1/')
+#echo period = $period
+
+cgroup=allocation_${CSM_ALLOCATION_ID}
+#echo cgroup = $cgroup
+
+jwind=$(dirname $(readlink -f $0))/jwind_cgroup
+#echo jwind = $jwind
+
+echo "($jwind -c $cgroup -w $window -p $period &)"
+($jwind -c $cgroup -w $window -p $period &)
