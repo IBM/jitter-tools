@@ -1,0 +1,12 @@
+[Unit]
+Description=dysc daemon
+Documentation=https://github.ibm.com/dcs-work/jitter-tools/tree/master/dysc
+
+[Service]
+ExecStart=/usr/sbin/dysc -s /sys/fs/cgroup/cpuset \
+                         -a /sys/fs/cgroup/cpuacct \
+                         -p /csm_system \
+                         -c /etc/sysconfig/dysc
+
+[Install]
+WantedBy=multi-user.target
